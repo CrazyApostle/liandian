@@ -11,12 +11,14 @@ class KeySelectorDialog(tk.Toplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("选择按键")
-        self.geometry("600x300")
+        self.geometry("650x350")  # 扩大对话框高度
         self.resizable(False, False)
         self.transient(parent)
         self.grab_set()
 
         self.selected_key = None
+        self.combined_keys = []  # 存储组合键
+        self.is_combining = False  # 是否处于组合键模式
 
         # 居中显示
         self.update_idletasks()
@@ -27,7 +29,18 @@ class KeySelectorDialog(tk.Toplevel):
         self.geometry('{}x{}+{}+{}'.format(width, height, x, y))
 
         # 创建UI
-        ttk.Label(self, text="请点击或按下想要添加的按键:").pack(pady=20)
+        ttk.Label(self, text="请点击或按下想要添加的按键:").pack(pady=10)
+
+        # 组合键提示
+        self.combo_frame = ttk.Frame(self)
+        self.combo_frame.pack(fill=tk.X, padx=20, pady=5)
+        
+        ttk.Label(self.combo_frame, text="当前组合键:").pack(side=tk.LEFT)
+        self.combo_label = ttk.Label(self.combo_frame, text="无", foreground="red")
+        self.combo_label.pack(side=tk.LEFT, padx=5)
+        
+        self.combine_button = ttk.Button(self.combo_frame, text="开始组合", command=self.toggle_combining)
+        self.combine_button.pack(side=tk.RIGHT)
 
         # 按键列表
         self.key_frame = ttk.Frame(self)
@@ -58,12 +71,36 @@ class KeySelectorDialog(tk.Toplevel):
         # 关闭时停止监听
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
+    def toggle_combining(self):
+        """切换组合键模式"""
+        self.is_combining = not self.is_combining
+        if self.is_combining:
+            self.combine_button.config(text="完成组合")
+            self.combined_keys = []
+            self.update_combo_label()
+        else:
+            self.combine_button.config(text="开始组合")
+            if self.combined_keys:
+                self.selected_key = "+".join(self.combined_keys)
+                self.destroy()
+
+    def update_combo_label(self):
+        """更新组合键标签"""
+        if self.combined_keys:
+            self.combo_label.config(text="+".join(self.combined_keys))
+        else:
+            self.combo_label.config(text="无")
+
     def on_key_press(self, key):
         try:
             # 处理字符键
             if hasattr(key, 'char'):
-                self.selected_key = key.char
-                self.destroy()
+                if self.is_combining:
+                    self.combined_keys.append(key.char)
+                    self.update_combo_label()
+                else:
+                    self.selected_key = key.char
+                    self.destroy()
             # 处理特殊键
             elif hasattr(key, 'name'):
                 key_map = {
@@ -101,14 +138,23 @@ class KeySelectorDialog(tk.Toplevel):
                     'divide': 'kp_divide',
                 }
                 if key.name in key_map:
-                    self.selected_key = key_map[key.name]
-                    self.destroy()
+                    key_name = key_map[key.name]
+                    if self.is_combining:
+                        self.combined_keys.append(key_name)
+                        self.update_combo_label()
+                    else:
+                        self.selected_key = key_name
+                        self.destroy()
         except Exception as e:
             print(f"Error handling key press: {e}")
 
     def select_key(self, key):
-        self.selected_key = key
-        self.destroy()
+        if self.is_combining:
+            self.combined_keys.append(key)
+            self.update_combo_label()
+        else:
+            self.selected_key = key
+            self.destroy()
 
     def on_close(self):
         self.listener.stop()
@@ -224,6 +270,7 @@ class AutoClickerApp:
 
         # 帮助信息
         ttk.Label(main_frame, text="提示: 运行时鼠标指针会自动点击").grid(row=8, column=0, columnspan=4, sticky=tk.W, pady=5)
+        ttk.Label(main_frame, text="组合键使用方法: 使用'开始组合'按钮录制组合键，如 ctrl+alt+a").grid(row=9, column=0, columnspan=4, sticky=tk.W, pady=2)
 
         # 绑定快捷键
         keyboard.add_hotkey(self.hotkey.get(), self.toggle_clicking)
@@ -295,11 +342,21 @@ class AutoClickerApp:
                                                         "kp_dot", "kp_plus", "kp_minus", "kp_multiply", "kp_divide"]
         for key in multi_keys:
             key = key.strip()
-            if key and key not in valid_keys:
-                messagebox.showerror("输入错误", f"无效的键位: {key}")
-                self.running = False
-                self.stop_clicking()
-                return
+            if key:
+                # 检查是否是组合键
+                if '+' in key:
+                    sub_keys = key.split('+')
+                    for sub_key in sub_keys:
+                        if sub_key not in valid_keys:
+                            messagebox.showerror("输入错误", f"无效的组合键成分: {sub_key}")
+                            self.running = False
+                            self.stop_clicking()
+                            return
+                elif key not in valid_keys:
+                    messagebox.showerror("输入错误", f"无效的键位: {key}")
+                    self.running = False
+                    self.stop_clicking()
+                    return
 
         # 自定义等待时间
         if wait_time > 0:
@@ -354,23 +411,53 @@ class AutoClickerApp:
 
     def perform_action(self, action):
         """执行具体的点击或按键操作"""
-        if action == "鼠标左键":
-            pyautogui.click(button='left')
-        elif action == "鼠标右键":
-            pyautogui.click(button='right')
-        elif action == "鼠标中键":
-            pyautogui.click(button='middle')
-        elif action in ["left", "right", "up", "down", "ctrl", "shift", "alt"]:
-            # 使用keyboard库处理标准按键
-            keyboard.press_and_release(action)
-        elif action.startswith("kp_"):
-            # 使用keyboard库处理小键盘按键
-            # 将kp_格式转换为keyboard库支持的格式
-            keyboard_key = action.replace("kp_", "num_")
-            keyboard.press_and_release(keyboard_key)
+        if '+' in action:
+            # 处理组合键
+            keys = action.split('+')
+            
+            # 按下所有键
+            for key in keys:
+                if key == "鼠标左键":
+                    pyautogui.mouseDown(button='left')
+                elif key == "鼠标右键":
+                    pyautogui.mouseDown(button='right')
+                elif key == "鼠标中键":
+                    pyautogui.mouseDown(button='middle')
+                else:
+                    # 处理键盘按键
+                    keyboard_key = key.replace("kp_", "num_")
+                    keyboard.press(keyboard_key)
+            
+            # 释放所有键
+            for key in reversed(keys):
+                if key == "鼠标左键":
+                    pyautogui.mouseUp(button='left')
+                elif key == "鼠标右键":
+                    pyautogui.mouseUp(button='right')
+                elif key == "鼠标中键":
+                    pyautogui.mouseUp(button='middle')
+                else:
+                    # 处理键盘按键
+                    keyboard_key = key.replace("kp_", "num_")
+                    keyboard.release(keyboard_key)
         else:
-            # 键盘按键
-            keyboard.press_and_release(action.lower())
+            # 处理单个键
+            if action == "鼠标左键":
+                pyautogui.click(button='left')
+            elif action == "鼠标右键":
+                pyautogui.click(button='right')
+            elif action == "鼠标中键":
+                pyautogui.click(button='middle')
+            elif action in ["left", "right", "up", "down", "ctrl", "shift", "alt"]:
+                # 使用keyboard库处理标准按键
+                keyboard.press_and_release(action)
+            elif action.startswith("kp_"):
+                # 使用keyboard库处理小键盘按键
+                keyboard_key = action.replace("kp_", "num_")
+                keyboard.press_and_release(keyboard_key)
+            else:
+                # 键盘按键
+                keyboard.press_and_release(action.lower())
 
 
 if __name__ == "__main__":
